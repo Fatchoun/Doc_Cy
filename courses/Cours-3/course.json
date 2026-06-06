@@ -1,0 +1,12 @@
+{
+  "title": "Leçon 3 — Anatomie du Système Digestif",
+  "description": "Anatomie fonctionnelle, organogenèse et topographie",
+  "files": {
+    "cours_fr":   "Anatomie_Digestive_Francais.pptx",
+    "cours_ru":   "Digestive-stom-05y.ppt",
+    "resume_fr":  "Resume_Francais.docx",
+    "resume_ru":  "Resume_Russe.docx",
+    "qa_fr":      "QA_Francais.docx",
+    "qa_ru":      "QA_Russe.docx"
+  }
+}

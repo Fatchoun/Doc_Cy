@@ -1,0 +1,17 @@
+Leçon 2 : Les chiffres de 1 à 20
+
+один    (1)  = un        одиннадцать   (11) = onze
+два     (2)  = deux      двенадцать    (12) = douze
+три     (3)  = trois     тринадцать    (13) = treize
+четыре  (4)  = quatre    четырнадцать  (14) = quatorze
+пять    (5)  = cinq      пятнадцать    (15) = quinze
+шесть   (6)  = six       шестнадцать   (16) = seize
+семь    (7)  = sept      семнадцать    (17) = dix-sept
+восемь  (8)  = huit      восемнадцать  (18) = dix-huit
+девять  (9)  = neuf      девятнадцать  (19) = dix-neuf
+десять  (10) = dix       двадцать      (20) = vingt
+
+Phrases utiles :
+— J'ai ... ans.
+— J'ai ... livre(s).
+— Combien ça coûte ? — ... roubles.

@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "preview",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": ["-NonInteractive", "-File", "C:\\Users\\admin\\Doc_Cy\\serve.ps1"],
+      "port": 8080,
+      "autoPort": true
+    }
+  ]
+}

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Doc_Cy — Cours de Russe</title>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#0f1117;--side:#16181f;--card:#1e2130;
+      --bdr:#2a2d3e;--acc:#6c63ff;
+      --txt:#e2e8f0;--muted:#8892a4;--r:10px
+    }
+    body{font-family:'Segoe UI',sans-serif;background:var(--bg);color:var(--txt);height:100vh;overflow:hidden;display:flex}
+
+    /* Sidebar */
+    #sidebar{width:260px;min-width:200px;background:var(--side);border-right:1px solid var(--bdr);display:flex;flex-direction:column;overflow:hidden}
+    #sidebar header{padding:20px 20px 16px;border-bottom:1px solid var(--bdr)}
+    #sidebar header h1{font-size:1.1rem;font-weight:700;color:var(--acc);letter-spacing:.04em}
+    #sidebar header p{font-size:.73rem;color:var(--muted);margin-top:4px}
+    #course-list{flex:1;overflow-y:auto;padding:10px 8px}
+    .ci{padding:10px 14px;border-radius:var(--r);cursor:pointer;transition:background .15s;margin-bottom:4px}
+    .ci:hover{background:var(--card)}
+    .ci.active{background:var(--acc)}
+    .ci h3{font-size:.85rem;font-weight:600}
+    .ci p{font-size:.72rem;color:var(--muted);margin-top:2px}
+    .ci.active p{color:rgba(255,255,255,.7)}
+
+    /* Main */
+    #main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+    #empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:12px}
+    #empty .icon{font-size:3rem}
+
+    /* Header + tabs */
+    #course-hdr{padding:20px 28px 0;border-bottom:1px solid var(--bdr)}
+    #course-hdr h2{font-size:1.3rem;font-weight:700;margin-bottom:14px}
+    #tabs{display:flex;gap:4px}
+    .tb{padding:8px 20px;border:none;background:transparent;color:var(--muted);font-size:.85rem;font-weight:500;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s}
+    .tb:hover{color:var(--txt)}
+    .tb.active{color:var(--acc);border-bottom-color:var(--acc)}
+
+    /* Side-by-side */
+    #panel{flex:1;display:grid;grid-template-columns:1fr 1fr;overflow:hidden}
+    .lp{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--bdr)}
+    .lp:last-child{border-right:none}
+    .lh{padding:12px 20px;font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid var(--bdr);display:flex;align-items:center;gap:8px}
+    .lh.ru{color:#60a5fa}
+    .lh.fr{color:#f59e0b}
+    .lc{flex:1;overflow-y:auto;padding:20px}
+    .lc pre{white-space:pre-wrap;word-break:break-word;font-family:'Segoe UI',sans-serif;font-size:.88rem;line-height:1.7}
+    .lc.empty{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:.8rem}
+
+    /* Q&A */
+    .qa-wrap{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px}
+    .qa-item{background:var(--card);border:1px solid var(--bdr);border-radius:var(--r);overflow:hidden}
+    .qa-q{padding:12px 16px;font-weight:600;font-size:.88rem;background:rgba(108,99,255,.12);border-bottom:1px solid var(--bdr);display:flex;gap:8px}
+    .qa-a{padding:12px 16px;font-size:.85rem;line-height:1.6}
+    .ql{color:var(--acc);font-weight:700;flex-shrink:0}
+    .al{color:#4ade80;font-weight:700}
+
+    ::-webkit-scrollbar{width:6px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:var(--bdr);border-radius:3px}
+  </style>
+</head>
+<body>
+
+<aside id="sidebar">
+  <header><h1>Doc_Cy</h1><p>Cours de Russe</p></header>
+  <div id="course-list"></div>
+</aside>
+
+<div id="main">
+  <div id="empty">
+    <div class="icon">📚</div>
+    <h2>Sélectionnez un cours</h2>
+    <p>Choisissez un cours dans la liste à gauche.</p>
+  </div>
+  <div id="course-view" style="display:none;flex:1;flex-direction:column;overflow:hidden">
+    <div id="course-hdr">
+      <h2 id="course-title"></h2>
+      <div id="tabs">
+        <button class="tb active" data-tab="cours">📖 Cours</button>
+        <button class="tb" data-tab="resume">📝 Résumé</button>
+        <button class="tb" data-tab="qa">❓ Q &amp; R</button>
+      </div>
+    </div>
+    <div id="panel"></div>
+  </div>
+</div>
+
+<script>
+const COURSES = [
+  { id:'cours-1', title:'Leçon 1 — Se présenter', desc:"Bonjour, je m'appelle..." },
+  { id:'cours-2', title:'Leçon 2 — Les chiffres', desc:'1 à 20 en russe' }
+];
+
+const DATA = {
+  'cours-1': {
+    title: 'Leçon 1 — Se présenter',
+    cours: {
+      ru: `Урок 1: Знакомство\n\nМеня зовут Иван. Мне двадцать пять лет.\nЯ из России. Я живу в Москве.\nЯ студент. Я изучаю русский язык.\n\nОсновные фразы:\n— Как вас зовут?\n— Меня зовут...\n— Откуда вы?\n— Я из...\n— Сколько вам лет?\n— Мне ... лет.\n\nЗапомните:\nПривет!      = Bonjour / Salut\nПока!        = Au revoir\nСпасибо      = Merci\nПожалуйста   = De rien`,
+      fr: `Leçon 1 : Se présenter\n\nJe m'appelle Ivan. J'ai vingt-cinq ans.\nJe viens de Russie. J'habite à Moscou.\nJe suis étudiant. J'étudie la langue russe.\n\nPhrases essentielles :\n— Comment vous appelez-vous ?\n— Je m'appelle...\n— D'où venez-vous ?\n— Je viens de...\n— Quel âge avez-vous ?\n— J'ai ... ans.\n\nÀ retenir :\nПривет!      = Bonjour / Salut\nПока!        = Au revoir\nСпасибо      = Merci\nПожалуйста   = De rien`
+    },
+    resume: {
+      ru: `Резюме урока 1\n\nВ этом уроке мы научились:\n• Называть своё имя: «Меня зовут...»\n• Говорить свой возраст: «Мне ... лет»\n• Указывать страну происхождения: «Я из...»\n• Использовать основные приветствия\n\nКлючевые слова:\nзовут   — s'appeler\nлет     — ans\nиз      — de (origine)\nстудент — étudiant\nживу    — j'habite`,
+      fr: `Résumé de la leçon 1\n\nDans cette leçon nous avons appris à :\n• Dire son prénom : « Меня зовут... »\n• Donner son âge : « Мне ... лет »\n• Indiquer son pays d'origine : « Я из... »\n• Utiliser les salutations de base\n\nMots-clés :\nзовут   — s'appeler\nлет     — ans\nиз      — de (origine)\nстудент — étudiant\nживу    — j'habite`
+    },
+    qa: {
+      ru: [{q:'Как вас зовут?',a:'Меня зовут Иван.'},{q:'Откуда вы?',a:'Я из России.'},{q:'Сколько вам лет?',a:'Мне двадцать пять лет.'},{q:'Где вы живёте?',a:'Я живу в Москве.'},{q:'Кто вы по профессии?',a:'Я студент.'}],
+      fr: [{q:'Comment vous appelez-vous ?',a:"Je m'appelle Ivan."},{q:"D'où venez-vous ?",a:'Je viens de Russie.'},{q:'Quel âge avez-vous ?',a:"J'ai vingt-cinq ans."},{q:'Où habitez-vous ?',a:"J'habite à Moscou."},{q:'Quelle est votre profession ?',a:'Je suis étudiant.'}]
+    }
+  },
+  'cours-2': {
+    title: 'Leçon 2 — Les chiffres',
+    cours: {
+      ru: `Урок 2: Числа от 1 до 20\n\nодин    (1)     одиннадцать   (11)\nдва     (2)     двенадцать    (12)\nтри     (3)     тринадцать    (13)\nчетыре  (4)     четырнадцать  (14)\nпять    (5)     пятнадцать    (15)\nшесть   (6)     шестнадцать   (16)\nсемь    (7)     семнадцать    (17)\nвосемь  (8)     восемнадцать  (18)\nдевять  (9)     девятнадцать  (19)\nдесять  (10)    двадцать      (20)\n\nПолезные фразы:\n— Мне ... лет.\n— Сколько стоит? — ... рублей.`,
+      fr: `Leçon 2 : Les chiffres de 1 à 20\n\nодин   (1)  = un         одиннадцать (11) = onze\nдва    (2)  = deux       двенадцать  (12) = douze\nтри    (3)  = trois      тринадцать  (13) = treize\nчетыре (4)  = quatre     четырнадцать(14) = quatorze\nпять   (5)  = cinq       пятнадцать  (15) = quinze\nшесть  (6)  = six        шестнадцать (16) = seize\nсемь   (7)  = sept       семнадцать  (17) = dix-sept\nвосемь (8)  = huit       восемнадцать(18) = dix-huit\nдевять (9)  = neuf       девятнадцать(19) = dix-neuf\nдесять (10) = dix        двадцать    (20) = vingt`
+    },
+    resume: {
+      ru: `Резюме урока 2\n\nЧисла от 1 до 10 — базовые числительные.\nЧисла от 11 до 19 образуются добавлением суффикса «-надцать».\nЧисло 20 — «двадцать» (запомнить отдельно).\n\nХитрость:\n11–14 = неправильная форма + надцать\n15–19 = пять…девять + надцать (правильная)`,
+      fr: `Résumé de la leçon 2\n\nLes chiffres 1 à 10 sont les formes de base à mémoriser.\nLes chiffres 11 à 19 se forment avec le suffixe « -надцать ».\nLe 20 — « двадцать » — est à part.\n\nAstuce :\n11–14 = forme irrégulière + надцать\n15–19 = пять…девять + надцать (régulier)`
+    },
+    qa: {
+      ru: [{q:"Как по-русски «cinq» ?",a:'Пять.'},{q:"Как по-русски «douze» ?",a:'Двенадцать.'},{q:'Сколько будет десять плюс пять?',a:'Пятнадцать.'},{q:'Как образуются числа от 11 до 19?',a:'Добавляется суффикс «-надцать».'},{q:"Как по-русски «vingt» ?",a:'Двадцать.'}],
+      fr: [{q:"Comment dit-on « cinq » en russe ?",a:'Пять.'},{q:"Comment dit-on « douze » en russe ?",a:'Двенадцать.'},{q:'Combien font dix plus cinq ?',a:'Пятнадцать (quinze).'},{q:'Comment se forment les chiffres de 11 à 19 ?',a:"En ajoutant le suffixe « -надцать »."},{q:"Comment dit-on « vingt » en russe ?",a:'Двадцать.'}]
+    }
+  }
+};
+
+let current = null, activeTab = 'cours';
+
+// Build sidebar
+const list = document.getElementById('course-list');
+COURSES.forEach(c => {
+  const el = document.createElement('div');
+  el.className = 'ci';
+  el.innerHTML = `<h3>${c.title}</h3><p>${c.desc}</p>`;
+  el.addEventListener('click', () => selectCourse(c.id, el));
+  list.appendChild(el);
+});
+
+function selectCourse(id, el) {
+  document.querySelectorAll('.ci').forEach(x => x.classList.remove('active'));
+  el.classList.add('active');
+  current = DATA[id];
+  document.getElementById('empty').style.display = 'none';
+  const view = document.getElementById('course-view');
+  view.style.display = 'flex';
+  document.getElementById('course-title').textContent = current.title;
+  showTab(activeTab);
+}
+
+// Tabs
+document.querySelectorAll('.tb').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tb').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeTab = btn.dataset.tab;
+    if (current) showTab(activeTab);
+  });
+});
+
+function showTab(tab) {
+  const panel = document.getElementById('panel');
+  const d = current[tab];
+  if (tab === 'qa') {
+    panel.innerHTML = buildQAPanel(d.ru, 'ru', 'RU') + buildQAPanel(d.fr, 'fr', 'FR');
+  } else {
+    panel.innerHTML = buildTextPanel(d.ru, 'ru', 'RU') + buildTextPanel(d.fr, 'fr', 'FR');
+  }
+}
+
+function buildTextPanel(text, cls, label) {
+  const flags = {ru:'🇷🇺', fr:'🇫🇷'};
+  const body = text
+    ? `<pre>${esc(text)}</pre>`
+    : `<span>Fichier non disponible</span>`;
+  const empty = text ? '' : ' empty';
+  return `<div class="lp"><div class="lh ${cls}">${flags[cls]} ${label}</div><div class="lc${empty}">${body}</div></div>`;
+}
+
+function buildQAPanel(items, cls, label) {
+  const flags = {ru:'🇷🇺', fr:'🇫🇷'};
+  const cards = items.map((it, i) => `
+    <div class="qa-item">
+      <div class="qa-q"><span class="ql">Q${i+1}</span>${esc(it.q)}</div>
+      <div class="qa-a"><span class="al">R — </span>${esc(it.a)}</div>
+    </div>`).join('');
+  return `<div class="lp"><div class="lh ${cls}">${flags[cls]} ${label}</div><div class="qa-wrap">${cards}</div></div>`;
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>
