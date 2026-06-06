@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
 import SideBySide from './SideBySide';
+import CourseSlideViewer from './CourseSlideViewer';
 import QASection from './QASection';
 import SmartSummary from './SmartSummary';
 import ExamSimulator from './ExamSimulator';
+
+const PPT_EXTS = ['.ppt', '.pptx'];
 
 const TABS = [
   { id: 'cours', label: 'Cours', icon: '📖' },
@@ -62,9 +65,15 @@ export default function CourseViewer({ courseId }) {
       </div>
 
       <div className="viewer-content">
-        {tab === 'cours' && (
-          <SideBySide contentRu={data.cours?.ru} contentFr={data.cours?.fr} />
-        )}
+        {tab === 'cours' && (() => {
+          const pptRu = data.coursFiles?.ru && PPT_EXTS.includes(data.coursFiles.ru.slice(data.coursFiles.ru.lastIndexOf('.')).toLowerCase());
+          const pptFr = data.coursFiles?.fr && PPT_EXTS.includes(data.coursFiles.fr.slice(data.coursFiles.fr.lastIndexOf('.')).toLowerCase());
+          if (pptRu || pptFr) {
+            const langs = [pptRu && 'ru', pptFr && 'fr'].filter(Boolean);
+            return <CourseSlideViewer courseId={data.id} langs={langs} />;
+          }
+          return <SideBySide contentRu={data.cours?.ru} contentFr={data.cours?.fr} />;
+        })()}
         {tab === 'resume' && (
           <SmartSummary courseData={data} />
         )}

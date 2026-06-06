@@ -4,136 +4,212 @@ const multer     = require('multer');
 const os         = require('os');
 const fs         = require('fs');
 const path       = require('path');
-const { execFile } = require('child_process');
-const { promisify } = require('util');
-const { parsePptx, extractTextMap, applyTranslations } = require('../lib/pptxParser');
+const AdmZip     = require('adm-zip');
+const { parsePptx } = require('../lib/pptxParser');
+const { exportSlidesToImages, convertPptAndExport } = require('../lib/pptExporter');
 
 const AnthropicPkg = require('@anthropic-ai/sdk');
 const Anthropic    = AnthropicPkg.default || AnthropicPkg;
-const client       = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+let client = null;
+function getClient() {
+  if (!client) client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return client;
+}
 
-const execFileAsync = promisify(execFile);
 const router = express.Router();
+
+// ─── Session store: keeps the PPTX on disk so we can re-export after translation ─
+
+const sessions = new Map(); // id → { pptxPath, slideCount, expiry }
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, s] of sessions) {
+    if (s.expiry < now) {
+      try { fs.unlinkSync(s.pptxPath); } catch {}
+      sessions.delete(id);
+    }
+  }
+}, 5 * 60 * 1000);
+
+function createSession(pptxPath, slideCount) {
+  const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const stored = path.join(os.tmpdir(), `ppt_sess_${id}.pptx`);
+  fs.copyFileSync(pptxPath, stored);
+  sessions.set(id, { pptxPath: stored, slideCount, expiry: Date.now() + 30 * 60 * 1000 });
+  return id;
+}
+
+// ─── Multer ────────────────────────────────────────────────────────────────────
 
 const upload = multer({
   dest: os.tmpdir(),
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (ext === '.pptx') return cb(null, true);
-    cb(new Error('Seul le format PPTX (.pptx) est supporté pour la prévisualisation'));
+    if (ext === '.pptx' || ext === '.ppt') return cb(null, true);
+    cb(new Error('Seul les formats PPT et PPTX sont supportés'));
   },
 });
 
-// ─── PowerPoint → PNG export via COM automation ───────────────────────────────
+// ─── PPTX XML text replacement ────────────────────────────────────────────────
 
-async function exportSlidesToImages(pptxPath, slideCount) {
-  const uid      = Date.now();
-  const outDir   = path.join(os.tmpdir(), `ppt_imgs_${uid}`);
-  const psFile   = path.join(os.tmpdir(), `ppt_exp_${uid}.ps1`);
+function xmlDecode(s) {
+  return s
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&#x([0-9A-Fa-f]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(+d));
+}
 
-  fs.mkdirSync(outDir, { recursive: true });
+function xmlEncode(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
-  // Single-quote-safe paths for PowerShell literal strings
-  const pptxPs  = pptxPath.replace(/'/g, "''");
-  const outDirPs = outDir.replace(/'/g, "''");
+function extractParaText(paraContent) {
+  const re = /<a:t[^>]*>([\s\S]*?)<\/a:t>/g;
+  let text = '', m;
+  while ((m = re.exec(paraContent)) !== null) text += xmlDecode(m[1]);
+  return text;
+}
 
-  const ps1 = `$ErrorActionPreference = 'Stop'
-$pptApp = $null
-try {
-  # Kill any non-responsive PowerPoint instances left from prior runs
-  Get-Process 'POWERPNT' -ErrorAction SilentlyContinue |
-    Where-Object { -not $_.Responding } |
-    Stop-Process -Force -ErrorAction SilentlyContinue
-
-  $pptApp = New-Object -ComObject PowerPoint.Application
-  $pptApp.Visible = -1
-  $pptApp.WindowState = 2
-  $prs = $pptApp.Presentations.Open('${pptxPs}', 0, 0, 0)
-  if ($prs -eq $null) { throw 'Presentations.Open returned null' }
-  $n = $prs.Slides.Count
-  for ($i = 1; $i -le $n; $i++) {
-    $sl = $prs.Slides.Item($i)
-    $sl.Export((Join-Path '${outDirPs}' "slide_$i.png"), 'PNG', 960, 540)
+function replaceParaText(paraContent, translated) {
+  // Extract first run's formatting properties
+  const firstRunM = paraContent.match(/<a:r\b[^>]*>([\s\S]*?)<\/a:r>/);
+  let rPr = '';
+  if (firstRunM) {
+    const prM = firstRunM[1].match(/<a:rPr(?:\s[^>]*)?>[\s\S]*?<\/a:rPr>|<a:rPr(?:\s[^>]*)?\/>/);
+    if (prM) rPr = prM[0];
   }
-  $prs.Close()
-  Write-Output "done:$n"
-} catch {
-  Write-Error "$_"
-  exit 1
-} finally {
-  if ($pptApp -ne $null) { try { $pptApp.Quit() } catch {} }
-}`;
+  // Remove all existing runs; append single run with translated text
+  const withoutRuns = paraContent.replace(/<a:r\b[^>]*>[\s\S]*?<\/a:r>/g, '');
+  return withoutRuns + `<a:r>${rPr}<a:t>${xmlEncode(translated)}</a:t></a:r>`;
+}
 
-  fs.writeFileSync(psFile, ps1, 'utf8');
-  // Keep a debug copy so it can be inspected if the script fails
-  fs.writeFileSync(path.join(os.tmpdir(), 'ppt_last_export.ps1'), ps1, 'utf8');
+function applyTranslationsToSlideXml(xml, origToTrans) {
+  return xml.replace(/<a:p\b([^>]*)>([\s\S]*?)<\/a:p>/g, (_, attrs, content) => {
+    const orig = extractParaText(content).trim();
+    if (!orig || !Object.prototype.hasOwnProperty.call(origToTrans, orig)) {
+      return `<a:p${attrs}>${content}</a:p>`;
+    }
+    return `<a:p${attrs}>${replaceParaText(content, origToTrans[orig])}</a:p>`;
+  });
+}
+
+async function buildTranslatedPngs(sessionId, textMap, translatedMap) {
+  const session = sessions.get(sessionId);
+  if (!session) throw new Error('Session expirée');
+
+  // Build original-text → translated-text lookup
+  const origToTrans = {};
+  for (const [k, orig] of Object.entries(textMap)) {
+    const trans = translatedMap[k];
+    if (trans && trans !== orig) origToTrans[orig.trim()] = trans;
+  }
+  if (!Object.keys(origToTrans).length) return null;
+
+  // Modify the PPTX XML in-memory
+  const zip = new AdmZip(session.pptxPath);
+  for (const entry of zip.getEntries()) {
+    if (/^ppt\/slides\/slide\d+\.xml$/.test(entry.entryName)) {
+      const xml      = entry.getData().toString('utf8');
+      const modified = applyTranslationsToSlideXml(xml, origToTrans);
+      zip.updateFile(entry.entryName, Buffer.from(modified, 'utf8'));
+    }
+  }
+
+  // Write modified PPTX to temp file
+  const translatedPptxPath = path.join(os.tmpdir(), `ppt_trans_${Date.now()}.pptx`);
+  zip.writeZip(translatedPptxPath);
 
   try {
-    await execFileAsync('powershell.exe', [
-      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-      '-File', psFile,
-    ], { timeout: 120000 });
-
-    const images = [];
-    for (let i = 1; i <= slideCount; i++) {
-      const imgPath = path.join(outDir, `slide_${i}.png`);
-      if (fs.existsSync(imgPath)) {
-        const buf = fs.readFileSync(imgPath);
-        images.push(`data:image/png;base64,${buf.toString('base64')}`);
-        fs.unlinkSync(imgPath);
-      } else {
-        images.push(null);
-      }
-    }
+    // Re-export translated slides through PowerPoint COM
+    const images = await exportSlidesToImages(translatedPptxPath, session.slideCount);
+    console.log(`[ppt] Re-exported ${session.slideCount} translated slides`);
     return images;
   } finally {
-    try { fs.unlinkSync(psFile); } catch {}
-    try { fs.rmdirSync(outDir); } catch {}
+    try { fs.unlinkSync(translatedPptxPath); } catch {}
   }
 }
 
-// POST /api/ppt/parse — upload PPTX, return full slide data + high-quality images
+// ─── Routes ────────────────────────────────────────────────────────────────────
+
+// POST /api/ppt/parse
 router.post('/parse', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Aucun fichier fourni' });
-  const tmpPath = req.file.path + '.pptx';
-  try {
-    fs.renameSync(req.file.path, tmpPath);
-    const data = parsePptx(tmpPath);
 
-    // Export each slide to PNG via PowerPoint COM for pixel-perfect preview
-    let slideImages = null;
-    try {
-      slideImages = await exportSlidesToImages(tmpPath, data.slides.length);
-      console.log(`[ppt] Exported ${data.slides.length} slides to PNG`);
-    } catch (imgErr) {
-      console.warn('[ppt] PowerPoint image export failed (HTML fallback):', imgErr.message, '\nstderr:', imgErr.stderr, '\nstdout:', imgErr.stdout);
+  const origExt    = path.extname(req.file.originalname).toLowerCase();
+  const isLegacy   = origExt === '.ppt';
+  const uploadPath = req.file.path + origExt;
+  let convertedPath = null;
+
+  try {
+    fs.renameSync(req.file.path, uploadPath);
+
+    let data, slideImages, pptxPathForSession;
+
+    if (isLegacy) {
+      console.log('[ppt] .ppt — converting + exporting via PowerPoint COM…');
+      let result;
+      try {
+        result = await convertPptAndExport(uploadPath);
+      } catch (convErr) {
+        console.error('[ppt] PPT conversion failed:', convErr.message);
+        return res.status(500).json({ error: `Conversion PPT échouée : ${convErr.message}` });
+      }
+      convertedPath      = result.pptxPath;
+      pptxPathForSession = result.pptxPath;
+      data               = parsePptx(result.pptxPath);
+      slideImages        = result.images;
+      console.log(`[ppt] Converted + exported ${data.slides.length} slides`);
+    } else {
+      data               = parsePptx(uploadPath);
+      pptxPathForSession = uploadPath;
+      slideImages        = null;
+      try {
+        slideImages = await exportSlidesToImages(uploadPath, data.slides.length);
+        console.log(`[ppt] Exported ${data.slides.length} slides`);
+      } catch (imgErr) {
+        console.warn('[ppt] Image export failed (HTML fallback):', imgErr.message);
+      }
     }
 
-    res.json({
+    // Store PPTX for translation re-export
+    let sessionId = null;
+    try {
+      sessionId = createSession(pptxPathForSession, data.slides.length);
+    } catch (sessErr) {
+      console.warn('[ppt] Could not create session:', sessErr.message);
+    }
+
+    return res.json({
       ...data,
-      filename:    req.file.originalname,
-      slideCount:  data.slides.length,
-      slideImages,                       // null → frontend uses HTML rendering
+      sessionId,
+      filename:   req.file.originalname,
+      slideCount: data.slides.length,
+      slideImages,
     });
   } catch (e) {
-    res.status(500).json({ error: `Parsing échoué : ${e.message}` });
+    console.error('[ppt] /parse error:', e.message);
+    if (!res.headersSent) res.status(500).json({ error: `Parsing échoué : ${e.message}` });
   } finally {
-    try { fs.unlinkSync(tmpPath); } catch {}
+    try { fs.unlinkSync(uploadPath); } catch {}
+    if (convertedPath) try { fs.unlinkSync(convertedPath); } catch {}
     try { fs.unlinkSync(req.file.path); } catch {}
   }
 });
 
-// POST /api/ppt/translate-text — translate a text map (JSON), return translated map
+// POST /api/ppt/translate-text
 router.post('/translate-text', async (req, res) => {
-  const { textMap, targetLang, sourceLang } = req.body || {};
+  const { textMap, targetLang, sourceLang, sessionId } = req.body || {};
   if (!textMap || !targetLang) return res.status(400).json({ error: 'textMap et targetLang requis' });
 
   const keys = Object.keys(textMap);
-  if (!keys.length) return res.json({ translatedMap: {} });
+  if (!keys.length) return res.json({ translatedMap: {}, slideImages: null });
 
-  const CHUNK         = 80;
+  const CHUNK         = 40;
   const translatedMap = {};
+  const from          = sourceLang || 'auto-detect';
 
   for (let i = 0; i < keys.length; i += CHUNK) {
     const chunk = keys.slice(i, i + CHUNK);
@@ -141,19 +217,22 @@ router.post('/translate-text', async (req, res) => {
     chunk.forEach(k => { batch[k] = textMap[k]; });
 
     const prompt =
-      `Translate the following JSON object from ${sourceLang || 'auto-detect'} to ${targetLang}.\n` +
-      `RULES:\n` +
-      `- Keep every key exactly as-is (they are position identifiers)\n` +
-      `- Only translate the string values\n` +
-      `- Preserve spacing and punctuation structure within each value\n` +
-      `- Output ONLY valid JSON — no markdown, no explanation\n\n` +
-      JSON.stringify(batch);
+      `You are a professional presentation translator.\n` +
+      `Translate every text value in the JSON below from ${from} into ${targetLang}.\n\n` +
+      `STRICT RULES:\n` +
+      `- Output ONLY a valid JSON object. No markdown, no explanation, no extra text.\n` +
+      `- Copy every key exactly as-is (they are internal position identifiers).\n` +
+      `- Each value is one paragraph from a slide — translate it fully and naturally.\n` +
+      `- Produce fluent, idiomatic ${targetLang}. Never translate word-for-word.\n` +
+      `- Preserve numbers, proper nouns, brand names, and technical terms unchanged.\n` +
+      `- If a value is already in ${targetLang}, copy it unchanged.\n\n` +
+      JSON.stringify(batch, null, 2);
 
     try {
-      const resp = await client.messages.create({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 4096,
-        messages: [{ role: 'user', content: prompt }],
+      const resp = await getClient().messages.create({
+        model:      'claude-sonnet-4-6',
+        max_tokens: 8192,
+        messages:   [{ role: 'user', content: prompt }],
       });
       let raw = resp.content[0].text.trim();
       raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
@@ -161,12 +240,29 @@ router.post('/translate-text', async (req, res) => {
       const end    = raw.lastIndexOf('}');
       const parsed = JSON.parse(raw.slice(start, end + 1));
       Object.assign(translatedMap, parsed);
-    } catch {
+    } catch (err) {
+      console.error('[ppt] translation chunk failed:', err.message);
       chunk.forEach(k => { translatedMap[k] = textMap[k]; });
     }
   }
 
-  res.json({ translatedMap });
+  // Re-export slides with translated text via PowerPoint COM
+  let slideImages = null;
+  if (sessionId) {
+    try {
+      slideImages = await buildTranslatedPngs(sessionId, textMap, translatedMap);
+    } catch (reErr) {
+      console.warn('[ppt] Re-export failed (text-only fallback):', reErr.message);
+    }
+  }
+
+  res.json({ translatedMap, slideImages });
+});
+
+// Catch multer/fileFilter errors — always return JSON
+router.use((err, req, res, next) => {
+  console.error('[ppt] router error:', err.message);
+  if (!res.headersSent) res.status(400).json({ error: err.message || 'Erreur fichier' });
 });
 
 module.exports = router;

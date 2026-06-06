@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 echo ========================================
-echo   Doc_Cy -- Cours de Russe
+echo   Doc_Cy -- Cours de Medecine
 echo ========================================
 echo.
 
@@ -18,7 +18,6 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-:: Afficher la version de Node
 for /f "tokens=*" %%v in ('node --version') do set NODE_VER=%%v
 echo Node.js detecte : %NODE_VER%
 echo.
@@ -53,23 +52,31 @@ if not exist "%~dp0frontend\node_modules" (
     echo [2/4] Frontend : dependances deja installees
 )
 
+:: Construire le frontend
+echo [3/4] Construction du frontend...
+cd /d "%~dp0frontend"
+call npm run build
+if %ERRORLEVEL% neq 0 (
+    echo ERREUR lors de la construction du frontend !
+    pause
+    exit /b 1
+)
+cd /d "%~dp0"
+echo     Frontend construit avec succes.
 echo.
-echo [3/4] Demarrage du backend sur http://localhost:3001
-start "Doc_Cy Backend" cmd /k "cd /d "%~dp0backend" && echo Backend demarre... && node server.js"
 
-timeout /t 2 /nobreak >nul
+:: Demarrer uniquement le backend (qui sert aussi le frontend)
+echo [4/4] Demarrage de l'application sur http://localhost:3001
+start "Doc_Cy App" cmd /k "cd /d "%~dp0backend" && node server.js"
 
-echo [4/4] Demarrage du frontend sur http://localhost:3000
-start "Doc_Cy Frontend" cmd /k "cd /d "%~dp0frontend" && echo Frontend demarre... && npm run dev"
-
-timeout /t 4 /nobreak >nul
+timeout /t 3 /nobreak >nul
 
 echo.
 echo ========================================
-echo  Application lancee avec succes !
+echo  Application lancee !
 echo  Ouvrez votre navigateur sur :
-echo  http://localhost:3000
+echo  http://localhost:3001
 echo ========================================
 echo.
-start http://localhost:3000
+start http://localhost:3001
 pause
