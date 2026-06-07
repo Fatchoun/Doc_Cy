@@ -17,21 +17,22 @@ const LANGS = [
 
 // ─── client-side text map helpers (mirrors pptxParser.js) ────────────────────
 
+// Extract one entry per paragraph (join all runs) so Claude gets full sentences.
 function extractTextMap(slides) {
   const map = {};
   slides.forEach((slide, si) =>
     slide.elements.forEach((el, ei) => {
       if (el.type !== 'text') return;
-      el.paras.forEach((para, pi) =>
-        para.runs.forEach((run, ri) => {
-          if (run.text.trim()) map[`${si}_${ei}_${pi}_${ri}`] = run.text;
-        })
-      );
+      el.paras.forEach((para, pi) => {
+        const text = para.runs.map(r => r.text).join('');
+        if (text.trim()) map[`${si}_${ei}_${pi}`] = text;
+      });
     })
   );
   return map;
 }
 
+// Apply paragraph-level translations: collapse runs into one, keep first run's formatting.
 function applyTranslations(slides, tMap) {
   return slides.map((slide, si) => ({
     ...slide,
@@ -39,13 +40,12 @@ function applyTranslations(slides, tMap) {
       if (el.type !== 'text') return el;
       return {
         ...el,
-        paras: el.paras.map((para, pi) => ({
-          ...para,
-          runs: para.runs.map((run, ri) => {
-            const k = `${si}_${ei}_${pi}_${ri}`;
-            return k in tMap ? { ...run, text: tMap[k] } : run;
-          }),
-        })),
+        paras: el.paras.map((para, pi) => {
+          const k = `${si}_${ei}_${pi}`;
+          if (!(k in tMap)) return para;
+          const base = para.runs[0] || {};
+          return { ...para, runs: [{ ...base, text: tMap[k] }] };
+        }),
       };
     }),
   }));
@@ -125,8 +125,9 @@ function UploadZone({ onParsed }) {
 
   async function handleFile(f) {
     if (!f) return;
-    if (!f.name.toLowerCase().endsWith('.pptx')) {
-      setError('Seul le format PPTX est supporté pour la prévisualisation visuelle. Pour les fichiers .ppt, utilisez la section PDF/Docs.');
+    const lname = f.name.toLowerCase();
+    if (!lname.endsWith('.pptx') && !lname.endsWith('.ppt')) {
+      setError('Seul les formats PPT et PPTX sont supportés.');
       return;
     }
     if (f.size > 50 * 1024 * 1024) { setError('Fichier trop volumineux (max 50 Mo)'); return; }
@@ -147,7 +148,7 @@ function UploadZone({ onParsed }) {
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 24, gap: 16, overflowY: 'auto' }}>
       <div className="panel-header">
         <h2>🖼️ Traducteur de Présentations</h2>
-        <p>Uploadez un fichier PPTX — prévisualisez chaque slide avec son design original et traduisez le texte</p>
+        <p>Uploadez un fichier PPT ou PPTX — prévisualisez chaque slide avec son design original et traduisez le texte</p>
       </div>
 
       <div
@@ -159,7 +160,7 @@ function UploadZone({ onParsed }) {
         style={{ cursor: loading ? 'not-allowed' : 'pointer' }}
       >
         <input
-          ref={inputRef} type="file" accept=".pptx" style={{ display: 'none' }}
+          ref={inputRef} type="file" accept=".pptx,.ppt" style={{ display: 'none' }}
           onChange={e => handleFile(e.target.files[0])} disabled={loading}
         />
         {loading ? (
@@ -171,8 +172,8 @@ function UploadZone({ onParsed }) {
         ) : (
           <>
             <span className="drop-icon">🖼️</span>
-            <h3>Glissez votre présentation PPTX ici</h3>
-            <p>Format .pptx uniquement — max 50 Mo</p>
+            <h3>Glissez votre présentation ici</h3>
+            <p>Formats .ppt et .pptx — max 50 Mo</p>
           </>
         )}
       </div>
@@ -205,14 +206,16 @@ function UploadZone({ onParsed }) {
 // ─── main viewer ──────────────────────────────────────────────────────────────
 
 export default function PPTTranslator() {
-  const [pptData,          setPptData]          = useState(null);
-  const [slideImages,      setSlideImages]      = useState(null);  // PNG data URLs from PowerPoint
-  const [slideIdx,         setSlideIdx]         = useState(0);
-  const [tgtLang,          setTgtLang]          = useState('Français');
-  const [view,             setView]             = useState('original');
-  const [translating,      setTranslating]      = useState(false);
-  const [translatedSlides, setTranslatedSlides] = useState(null);
-  const [error,            setError]            = useState(null);
+  const [pptData,               setPptData]               = useState(null);
+  const [slideImages,           setSlideImages]           = useState(null);  // original PNGs
+  const [translatedSlideImages, setTranslatedSlideImages] = useState(null);  // re-exported PNGs after translation
+  const [sessionId,             setSessionId]             = useState(null);
+  const [slideIdx,              setSlideIdx]              = useState(0);
+  const [tgtLang,               setTgtLang]               = useState('Français');
+  const [view,                  setView]                  = useState('original');
+  const [translating,           setTranslating]           = useState(false);
+  const [translatedSlides,      setTranslatedSlides]      = useState(null);
+  const [error,                 setError]                 = useState(null);
 
   // Measure the slide content area width
   const contentRef   = useRef();
@@ -241,23 +244,29 @@ export default function PPTTranslator() {
       const r = await fetch('/api/ppt/translate-text', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ textMap, targetLang: tgtLang }),
+        body:    JSON.stringify({ textMap, targetLang: tgtLang, sessionId }),
       });
       let d;
       try { d = await r.json(); } catch { throw new Error(`Réponse invalide (${r.status})`); }
       if (!r.ok || d.error) throw new Error(d.error || `Erreur ${r.status}`);
       setTranslatedSlides(applyTranslations(pptData.slides, d.translatedMap));
+      // If backend re-exported slides with translated text, use those PNGs (pixel-perfect design)
+      if (d.slideImages && d.slideImages.some(Boolean)) {
+        setTranslatedSlideImages(d.slideImages);
+      }
       setView('translated');
     } catch (e) { setError(e.message); }
     finally { setTranslating(false); }
-  }, [pptData, tgtLang]);
+  }, [pptData, tgtLang, sessionId]);
 
   if (!pptData) {
     return <UploadZone onParsed={d => {
       setPptData(d);
       setSlideImages(d.slideImages || null);
+      setSessionId(d.sessionId || null);
       setSlideIdx(0);
       setTranslatedSlides(null);
+      setTranslatedSlideImages(null);
       setView('original');
     }} />;
   }
@@ -265,6 +274,11 @@ export default function PPTTranslator() {
   const slides = view === 'translated' && translatedSlides ? translatedSlides : pptData.slides;
   const total  = slides.length;
   const slide  = slides[Math.min(slideIdx, total - 1)];
+
+  // In translated view, use re-exported PNGs if available (preserves original design + translated text)
+  const activeBgImages = view === 'translated' && translatedSlideImages ? translatedSlideImages : slideImages;
+  // textOnly only when translated but no re-exported PNGs (HTML fallback)
+  const isTextOnly = view === 'translated' && !!translatedSlides && !translatedSlideImages;
 
   return (
     <div className="course-viewer">
@@ -288,7 +302,7 @@ export default function PPTTranslator() {
         <div className="ai-toolbar" style={{ borderBottom: 'none', paddingBottom: 6 }}>
           <span className="ai-toolbar-title">🌍 Traduire vers</span>
           <select className="select-styled" value={tgtLang}
-            onChange={e => { setTgtLang(e.target.value); setTranslatedSlides(null); setView('original'); }}>
+            onChange={e => { setTgtLang(e.target.value); setTranslatedSlides(null); setTranslatedSlideImages(null); setView('original'); }}>
             {LANGS.map(l => <option key={l.v} value={l.v}>{l.l}</option>)}
           </select>
           <button className="btn btn-primary" onClick={translate} disabled={translating}>
@@ -353,7 +367,7 @@ export default function PPTTranslator() {
               index={i}
               active={i === slideIdx}
               onClick={() => setSlideIdx(i)}
-              bgImage={slideImages?.[i]}
+              bgImage={activeBgImages?.[i]}
             />
           ))}
         </div>
@@ -364,7 +378,7 @@ export default function PPTTranslator() {
             <div className="loading-screen" style={{ minHeight: 200 }}>
               <div className="spinner" />
               <span className="loading-text">Traduction des {total} diapositives…</span>
-              <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>Cela peut prendre quelques secondes</span>
+              <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>IA + re-rendu via PowerPoint — peut prendre 20-40 s</span>
             </div>
           ) : (
             <div style={{
@@ -380,8 +394,8 @@ export default function PPTTranslator() {
                 slideW={pptData.slideW}
                 slideH={pptData.slideH}
                 containerWidth={slideWidth}
-                bgImage={slideImages?.[slideIdx]}
-                textOnly={view === 'translated' && !!translatedSlides}
+                bgImage={activeBgImages?.[slideIdx]}
+                textOnly={isTextOnly}
               />
             </div>
           )}

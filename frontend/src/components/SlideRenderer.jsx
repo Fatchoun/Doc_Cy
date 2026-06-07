@@ -1,8 +1,7 @@
 // Renders one parsed PPTX slide.
-// When bgImage (base64 PNG) is provided:
-//   - textOnly=false → show the PNG as-is (original view, pixel-perfect)
-//   - textOnly=true  → show PNG + translated text overlay
-// When no bgImage: HTML rendering (shapes + text from parsed data).
+// textOnly=false (original view)  → pixel-perfect PNG when bgImage is available
+// textOnly=true  (translated view) → full HTML rendering (no PNG, avoids text doubling)
+// no bgImage                       → full HTML rendering always
 
 const EPX = 9525; // EMU → px at 96 DPI
 
@@ -26,8 +25,8 @@ function ShapeEl({ el }) {
   );
 }
 
-function TextEl({ el, forceTransparent }) {
-  const bgColor = (forceTransparent || el.noFill || !el.fill) ? 'transparent' : el.fill;
+function TextEl({ el }) {
+  const bgColor = (el.noFill || !el.fill) ? 'transparent' : el.fill;
   return (
     <div style={{
       position:        'absolute',
@@ -96,7 +95,7 @@ export default function SlideRenderer({ slide, slideW, slideH, containerWidth, b
   const scale = containerWidth / refW;
   const h     = Math.round(refH * scale);
 
-  // ── image-only mode (original view with pixel-perfect PNG) ──────────────────
+  // Original view: pixel-perfect PNG (text is baked in, no HTML overlay needed)
   if (bgImage && !textOnly) {
     return (
       <div style={{ width: containerWidth, height: h, position: 'relative', overflow: 'hidden', flexShrink: 0 }}>
@@ -110,28 +109,10 @@ export default function SlideRenderer({ slide, slideW, slideH, containerWidth, b
     );
   }
 
-  // ── text-overlay mode (translated text over the PNG) OR full HTML rendering ─
+  // Translated view OR no bgImage: full HTML rendering.
+  // PNG is intentionally omitted here — showing it alongside HTML text would double the text.
   return (
     <div style={{ width: containerWidth, height: h, position: 'relative', overflow: 'hidden', flexShrink: 0 }}>
-
-      {/* PNG background layer (when available) */}
-      {bgImage && (
-        <img
-          src={bgImage}
-          alt=""
-          draggable={false}
-          style={{
-            position:   'absolute',
-            top:        0, left: 0,
-            width:      '100%', height: '100%',
-            objectFit:  'fill',
-            display:    'block',
-            userSelect: 'none',
-          }}
-        />
-      )}
-
-      {/* Reference-scale element layer */}
       <div style={{
         position:        'absolute',
         top:             0, left: 0,
@@ -139,21 +120,14 @@ export default function SlideRenderer({ slide, slideW, slideH, containerWidth, b
         height:          refH,
         transformOrigin: 'top left',
         transform:       `scale(${scale})`,
-        backgroundColor: bgImage ? 'transparent' : (slide.bgColor || '#FFFFFF'),
+        backgroundColor: slide.bgColor || '#FFFFFF',
       }}>
         {slide.elements.map((el, i) => {
-          if (bgImage) {
-            // Over a PNG: only render text overlays (shapes are already in the PNG)
-            if (el.type !== 'text') return null;
-            return <TextEl key={i} el={el} forceTransparent />;
-          }
-          // Full HTML rendering
           if (el.type === 'image') return <ImageEl key={i} el={el} />;
           if (el.type === 'text')  return <TextEl  key={i} el={el} />;
           return <ShapeEl key={i} el={el} />;
         })}
       </div>
-
     </div>
   );
 }

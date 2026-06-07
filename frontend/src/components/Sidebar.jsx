@@ -14,7 +14,7 @@ export default function Sidebar({ courses, selectedId, onSelect, loading, sectio
         </div>
         <div className="logo-text">
           <h1>MediLearn Pro</h1>
-          <p>Éducation Médicale IA</p>
+          <p>by Doc_Cy</p>
         </div>
       </div>
 
